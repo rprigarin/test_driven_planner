@@ -1,9 +1,5 @@
 """Check command line arguments and edge cases relating to them."""
 
-import unittest
+import pytest
 
 # ________________________________________________________________________________
-
-
-class TestInputParser(unittest.TestCase):
-    pass
