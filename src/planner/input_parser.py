@@ -10,5 +10,3 @@ The user may want to:
 - view statistics
 
 """
-
-import argparse
