@@ -5,7 +5,7 @@ from enum import Enum
 from datetime import date
 from json import load, JSONDecodeError
 
-from pymongo import MongoClient
+from pymongo import MongoClient, Database, Collection
 from pymongo import errors
 
 # ________________________________________________________________________________
@@ -25,13 +25,39 @@ class QueryCode(Enum):
     """Return codes for PlannerAccess queries."""
 
     OK = 0
-    FORMAT_CHECK_FAILED = -1
-    UPDATE_FAILED = -2
+    BAD_TASK = -1
+    DUPLICATE_TASK_FOUND = -2
+    INSERT_FAILED = -3
 
 
 class PlannerTask:
-    def __init__(self, task_desc, task_date):
-        pass
+    description: str
+    active_date: date
+    init_code: InitCode
+
+    def __init__(self, desc, date_params):
+        try:
+            self.description = desc
+            self.active_date = date(
+                date_params["year"], date_params["month"], date_params["day"]
+            )
+            self._validate()
+        except Exception as _e:
+            self.init_code = InitCode.FAIL
+
+    def _validate(self):
+        if type(self.description) is not str:
+            self.init_code = InitCode.FAIL
+            return
+
+        self.init_code = InitCode.OK
+
+    def get_init_code(self):
+        return self.init_code
+
+    def is_valid(self):
+        return self.init_code == InitCode.OK
+
 
 class PlannerAccess:
     """A class for accessing MongoDB and performing planner-related operations."""
@@ -39,20 +65,29 @@ class PlannerAccess:
     def __init__(self, db_name="planner_db", col_name="planner_col"):
 
         # Parameters
+        # - config file
         self.config: dict
-        self.client: MongoClient
-        self.init_state: int
 
+        # - MongoDB session
+        self.client: MongoClient
+        self.planner_db: Database
+        self.planner_col: Collection
         self.db_name = db_name
         self.col_name = col_name
 
-        # Initialization
-        if self._load_config() == InitCode.OK and self._connect() == InitCode.OK:
-            self.init_state = InitCode.OK
-        else:
-            self.init_state = InitCode.FAIL
+        # - Codes
+        self.init_code: InitCode
+        self.query_code: QueryCode
 
-    def _load_config(self):
+        # Initialization
+        if self.load_config() == InitCode.OK and self.connect() == InitCode.OK:
+            self.init_code = InitCode.OK
+        else:
+            self.init_code = InitCode.FAIL
+
+        self.query_code = QueryCode.OK
+
+    def load_config(self):
         """Parse config.json to initialize planner access."""
 
         # Check if config file exists
@@ -74,9 +109,10 @@ class PlannerAccess:
 
         return InitCode.OK
 
-    def _connect(self):
+    def connect(self):
         """Initialize the MongoDB client and attempt connection based on configuration."""
 
+        # Assign config parameters
         try:
             self.client = MongoClient(
                 self.config["uri"], serverSelectionTimeoutMS=self.config["timeout_ms"]
@@ -84,6 +120,7 @@ class PlannerAccess:
         except TypeError:
             return InitCode.BAD_CONFIG
 
+        # Check connection
         try:
             val = self.client.admin.command("ping")
             if val["ok"] != 1.0:
@@ -91,63 +128,59 @@ class PlannerAccess:
         except errors.ServerSelectionTimeoutError:
             return InitCode.DATABASE_UNREACHABLE
 
+        # Create database and collection objects
+        self.planner_db = self.client[self.db_name]
+        self.planner_col = self.planner_db[self.col_name]
+
         return InitCode.OK
 
+    def disconnect(self):
+        self.client.close()
+
     def get_initialization_code(self):
-        """Confirm whether planner access initialized properly using the init_state flag."""
+        """Confirm whether planner access initialized properly using the init_code flag."""
 
-        return self.init_state
+        return self.init_code
 
-    def insert_task(self, task):
-        pass
+    def get_query_code(self):
+        return self.query_code
 
-    def delete_task(self, task):
-        pass
+    def duplicate_exists(self, task: PlannerTask):
+        result = self.planner_col.find_one(
+            {
+                "task_desc": task.description,
+                "date": f"{task.active_date.year}-{task.active_date.month}-{task.active_date.day}",
+            }
+        )
 
-    def update_task(self, task, new_task):
-        pass
-
-    def get_tasks(self, date):
-        pass
-
-    def delete_date_tasks(self, date):
-        pass
-
-    def delete_all_tasks(self):
-        pass
-
-    def validate_task_query(self, task_query):
-        # If query isn't a dictionary, don't bother
-        if type(task_query) is not dict:
+        if result is not None:
+            return True
+        else:
             return False
 
-        return self._task_key_check(task_query) and self._task_value_check(task_query)
+    def insert(self, task: PlannerTask):
+        if not task.is_valid():
+            self.query_code = QueryCode.BAD_TASK
+            return
 
-    def _task_key_check(self, task_query):
-        fields = list(task_query.keys())
+        if self.duplicate_exists(task):
+            self.query_code = QueryCode.DUPLICATE_TASK_FOUND
+            return
 
-        # Must have exactly two keys
-        if len(fields) != 2:
-            return False
+        result = self.planner_col.insert_one(
+            {
+                "task_desc": task.description,
+                "date": f"{task.active_date.year}-{task.active_date.month}-{task.active_date.day}",
+            }
+        )
 
-        # Keys must be strings
-        for f in fields:
-            if type(f) is not str:
-                return False
+        if result is not None:
+            self.query_code = QueryCode.OK
+        else:
+            self.query_code = QueryCode.INSERT_FAILED
 
-        # Correct key names (order does not matter)
-        fields = list(task_query.keys())
-        return "task_desc" in fields and "date" in fields
+    def clear_planner(self):
+        _result = self.planner_col.delete_many({})
 
-    def _task_value_check(self, task_query):
-        # String check
-        if type(task_query["date"]) is not date:
-            return False
-        if type(task_query["task_desc"]) is not str:
-            return False
-
-        # Task description must not be empty
-        if task_query["task_desc"] == "":
-            return False
-
-        return True
+    def drop_planner(self):
+        _result = self.client.drop_database(self.planner_db)

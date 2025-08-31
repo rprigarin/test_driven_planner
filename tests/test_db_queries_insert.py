@@ -13,14 +13,16 @@ def planner_access():
     """General-purpose planner access for insertion queries."""
 
     planner = PlannerAccess("test_planner_db_general", "test_planner_col_general")
-
     yield planner
+
+    # Cleanup
+    planner.drop_planner()
+    planner.disconnect()
 
 
 # ________________________________________________________________________________
 
 
-@pytest.mark.skip
 @pytest.mark.parametrize(
     "task_params",
     [
@@ -35,10 +37,9 @@ def test_planner_inserts_task(planner_access, task_params):
 
     planner_access.insert(PlannerTask(task_params["task_desc"], task_params["date"]))
 
-    assert planner_access.get_query_code == QueryCode.OK
+    assert planner_access.get_query_code() == QueryCode.OK
 
 
-@pytest.mark.skip
 @pytest.mark.parametrize(
     "bad_task_params",
     [
@@ -55,10 +56,9 @@ def test_planner_does_not_insert_bad_task(planner_access, bad_task_params):
         PlannerTask(bad_task_params["task_desc"], bad_task_params["date"])
     )
 
-    assert planner_access.get_query_code == QueryCode.BAD_TASK
+    assert planner_access.get_query_code() == QueryCode.BAD_TASK
 
 
-@pytest.mark.skip
 def test_planner_does_not_insert_duplicate_task(planner_access):
     """PlannerAccess checks if the task with the same contents (description and date) is already present in the planner.
     If so, the operation fails with an appropriate query code."""
@@ -74,4 +74,4 @@ def test_planner_does_not_insert_duplicate_task(planner_access):
     planner_access.insert(first_task)
     planner_access.insert(second_task)
 
-    assert planner_access.get_query_code == QueryCode.DUPLICATE_TASK_FOUND
+    assert planner_access.get_query_code() == QueryCode.DUPLICATE_TASK_FOUND
