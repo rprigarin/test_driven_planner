@@ -29,6 +29,10 @@ class QueryCode(Enum):
     UPDATE_FAILED = -2
 
 
+class PlannerTask:
+    def __init__(self, task_desc, task_date):
+        pass
+
 class PlannerAccess:
     """A class for accessing MongoDB and performing planner-related operations."""
 
